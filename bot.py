@@ -9,10 +9,20 @@ import asyncio
 intents = discord.Intents.default()
 intents.message_content = True
 
-client = commands.Bot(command_prefix = "!", intents=intents)
-FFMPEG_OPTIONS = {'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5','options': '-vn'}
+client = commands.Bot(command_prefix="!", intents=intents)
+FFMPEG_OPTIONS = {'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5', 'options': '-vn'}
 
 music_queues = {}
+song_positions = {}  # Dictionary to track the position of the current song for each guild
+playlist_pos = 0
+
+@client.slash_command(name="slashping", description="Test command")
+async def slashping(ctx: discord.Interaction):
+    await ctx.response.send_message("Pong!")
+
+@client.command(pass_context=True)
+async def ping(ctx):
+    await ctx.send("Pong!")
 
 # Function to check if a string is a URL
 def is_url(string):
@@ -34,6 +44,14 @@ def search_youtube(query):
         else:
             return None
 
+def format_duration(seconds):
+    mins, secs = divmod(seconds, 60)
+    hours, mins = divmod(mins, 60)
+    if hours > 0:
+        return f'{hours:02}:{mins:02}:{secs:02}'
+    else:
+        return f'{mins:02}:{secs:02}'
+
 def get_youtube_audio_info(url):
     ydl_opts = {
         'format': 'bestaudio/best',
@@ -41,33 +59,53 @@ def get_youtube_audio_info(url):
     }
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=False)
-        return info['url'], info['title'], info['thumbnail']
+        duration = info.get('duration', 0)
+        return info['url'], info['title'], info['thumbnail'], duration
 
-async def play_next(ctx):
+async def play_next(ctx: discord.Interaction, triggered_by_next=False):
     guild_id = ctx.guild.id
-    
-    # Check if the queue exists and if it's empty
-    url = await music_queues[guild_id].get()
-    stream_url, title, thumbnail = get_youtube_audio_info(url)
+    vc = ctx.guild.voice_client
 
-    vc = ctx.voice_client
+    if guild_id not in music_queues or music_queues[guild_id].empty():
+        # Queue is empty, leave the voice channel
+        if vc and vc.is_connected():
+            await vc.disconnect()
+        # Only send the message if it was triggered by the /next command
+        if triggered_by_next:
+            await ctx.followup.send("C'était la dernière musique, il n'y en a plus dans la liste !")
+        return
+
+    # Increment the current song counter for this guild
+    song_positions[guild_id] += 1
+
+    # Get the next song URL from the queue
+    url = await music_queues[guild_id].get()
+    stream_url, title, thumbnail, duration = get_youtube_audio_info(url)
 
     vc.play(discord.FFmpegPCMAudio(stream_url, **FFMPEG_OPTIONS),
             after=lambda e: asyncio.run_coroutine_threadsafe(play_next(ctx), client.loop).result())
+
+    duration_str = format_duration(duration)
     embed = discord.Embed(
         title=f"En train de jouer : {title} !",
         url=url,
-        description="En train de jouer cette musique.",
+        description=f"Durée : {duration_str}\nMusique N°{song_positions[guild_id]}",
         color=discord.Color.blurple()
     )
     embed.set_thumbnail(url=thumbnail)
-    await ctx.respond(embed=embed)
-        #await ctx.send(f"En train de jouer : [{title}]({url})")
+    await ctx.followup.send(embed=embed)
 
-
-#@client.command(pass_context=True)
 @client.slash_command(name="play", description="Joue une musique")
-async def play(ctx:discord.Interaction, query: str):
+async def play(ctx: discord.Interaction, query: str):
+    global playlist_pos
+    await ctx.response.defer()
+    guild_id = ctx.guild.id
+
+    # Initialize the queue and song position counter if not already set
+    if guild_id not in music_queues:
+        music_queues[guild_id] = Queue()
+        song_positions[guild_id] = 0
+
     # Check if the user is in a voice channel
     if not ctx.author.voice:
         await ctx.respond("Tu n'es pas dans un salon vocal, rejoin une voc et relance la commande !")
@@ -77,26 +115,25 @@ async def play(ctx:discord.Interaction, query: str):
     if not is_url(query):
         url = search_youtube(query)
         if url is None:
-            await ctx.respond("Rien trouvé ¯\_(ツ)_/¯")
+            await ctx.respond("Rien trouvé ¯\\_(ツ)_/¯")
             return
     else:
         url = query
 
-    stream_url, title, thumbnail = get_youtube_audio_info(url)
+    stream_url, title, thumbnail, duration = get_youtube_audio_info(url)
+    duration_str = format_duration(duration)
+    
+    # Calculate the next song position
+    playlist_pos +=1
 
     embed = discord.Embed(
-        title=f"{title} a été ajouté a la playliste !",
+        title=f"{title} a été ajouté à la playlist !",
         url=url,
-        description="Cette musique a été ajouté a la playliste.",
+        description=f"Durée : {duration_str}\nMusique N°{playlist_pos}",
         color=discord.Color.blurple()
     )
     embed.set_thumbnail(url=thumbnail)
     await ctx.respond(embed=embed)
-
-    guild_id = ctx.guild.id
-
-    if guild_id not in music_queues:
-        music_queues[guild_id] = Queue()
 
     await music_queues[guild_id].put(url)
 
@@ -109,20 +146,25 @@ async def play(ctx:discord.Interaction, query: str):
     if not vc.is_playing():
         await play_next(ctx)
 
-#@client.command(pass_context=True)
-@client.slash_command(name="next", description="Joue la prochaine musique de la playliste")
-async def next(ctx:discord.Interaction):
+
+@client.slash_command(name="next", description="Joue la prochaine musique de la playlist")
+async def next(ctx: discord.Interaction):
+    await ctx.response.defer()
     vc = ctx.voice_client
     guild_id = ctx.guild.id
-    if guild_id in music_queues and music_queues[guild_id].empty():
-        await ctx.respond("C'était la dernière musique, il n'y en a plus dans la liste !")
-    else:
-        # Continue playing the next song in the queue
-        if vc and vc.is_playing():
-            vc.stop()
-        await play_next(ctx)
 
-#@client.command(pass_context=True)
+    if guild_id in music_queues:
+        # Check if the queue has more songs left
+        if not music_queues[guild_id].empty():
+            if vc and vc.is_playing():
+                vc.stop()  # Stop the current song and trigger play_next
+            else:
+                await play_next(ctx, triggered_by_next=True)
+        else:
+            await ctx.respond("C'était la dernière musique, il n'y en a plus dans la liste !")
+    else:
+        await ctx.respond("Il n'y a aucune musique en attente dans la liste !")
+
 @client.slash_command(name="leave", description="Quitte la voc")
 async def leave(ctx:discord.Interaction):
     if ctx.voice_client:

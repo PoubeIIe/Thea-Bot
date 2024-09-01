@@ -332,7 +332,11 @@ async def on_voice_state_update(member, before, after):
         song_played_positions[guild_id] = 0
         playlist_messages[guild_id] = {}  # Clear playlist messages
 
-        channel = before.channel.guild.system_channel  # Or specify the channel to send the message to
+        #for your own use, prescise the id you your channel where you want to sentd this message
+        # or send it in the system channel :
+        #channel = before.channel.guild.system_channel
+        channel_id = 1132378677175394378
+        channel = before.channel.guild.get_channel(channel_id)
         if channel:
             await channel.send("J'ai été déconnecté de la voc !")
 

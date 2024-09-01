@@ -106,6 +106,9 @@ def get_audio_info(url):
 async def play_next(ctx: discord.Interaction, triggered_by_next=False):
     guild_id = ctx.guild.id
     vc = ctx.guild.voice_client
+    # Check if the bot is still connected to the voice channel
+    if vc is None or not vc.is_connected():
+        return
 
     if guild_id not in music_queues or music_queues[guild_id].empty():
         # Queue is empty, leave the voice channel
@@ -136,7 +139,7 @@ async def play_next(ctx: discord.Interaction, triggered_by_next=False):
     embed = discord.Embed(
         title=f"En train de jouer : {title} !",
         url=url,
-        description=f"Durée : {duration_str}\nMusique N°{song_played_positions[guild_id]}",
+        description=f"Durée : {duration_str}\nMusique N°{song_played_positions[guild_id] + 1}",
         color=discord.Color.blurple()
     )
     embed.set_thumbnail(url=thumbnail)
@@ -159,8 +162,11 @@ async def play(ctx: discord.Interaction, query: str):
 
     # Check if the user is in a voice channel
     if not ctx.author.voice:
-        await ctx.respond("Tu n'es pas dans un salon vocal, rejoin une voc et relance la commande !")
+        await ctx.respond("Tu n'es pas dans un salon vocal, rejoins un voc et relance la commande !")
         return
+
+    voice_channel = ctx.author.voice.channel
+    vc = ctx.voice_client
 
     # Determine if the input is a URL or a search query
     if not is_url(query):
@@ -173,32 +179,41 @@ async def play(ctx: discord.Interaction, query: str):
 
     stream_url, title, thumbnail, duration = get_audio_info(url)
     duration_str = format_duration(duration)
-    
-    # Calculate the next song position in the playlist
-    playlist_positions[guild_id] += 1
 
-    embed = discord.Embed(
-        title=f"{title} a été ajouté à la playlist !",
-        url=url,
-        description=f"Durée : {duration_str}\nMusique N°{playlist_positions[guild_id]}",
-        color=discord.Color.orange()
-    )
-    embed.set_thumbnail(url=thumbnail)
-    added_msg = await ctx.respond(embed=embed)
+    # If this is the first song, start playing it immediately and don't add it to the playlist
+    if not vc or not vc.is_playing():
+        if vc is None:
+            vc = await voice_channel.connect()
 
-    # Store the message object in the dictionary
-    playlist_messages[guild_id][playlist_positions[guild_id]] = added_msg
+        embed = discord.Embed(
+            title=f"En train de jouer : {title} !",
+            url=url,
+            description=f"Durée : {duration_str}\nMusique N°1",
+            color=discord.Color.blurple()
+        )
+        embed.set_thumbnail(url=thumbnail)
+        await ctx.channel.send(embed=embed)
 
-    await music_queues[guild_id].put(url)
+        vc.play(discord.FFmpegPCMAudio(stream_url, **FFMPEG_OPTIONS),
+                after=lambda e: asyncio.run_coroutine_threadsafe(play_next(ctx), client.loop).result())
 
-    voice_channel = ctx.author.voice.channel
-    vc = ctx.voice_client
+    else:
+        # Increment the playlist position only when adding to the queue
+        playlist_positions[guild_id] += 1
+        await music_queues[guild_id].put(url)
 
-    if vc is None:
-        vc = await voice_channel.connect()
+        # Inform the user that the song was added to the playlist
+        embed = discord.Embed(
+            title=f"{title} a été ajouté à la playlist !",
+            url=url,
+            description=f"Durée : {duration_str}\nMusique N°{playlist_positions[guild_id] + 1}",
+            color=discord.Color.blurple()
+        )
+        embed.set_thumbnail(url=thumbnail)
+        added_msg = await ctx.channel.send(embed=embed)
 
-    if not vc.is_playing():
-        await play_next(ctx)
+        # Store the message object in the dictionary
+        playlist_messages[guild_id][playlist_positions[guild_id]] = added_msg
 
 
 @client.slash_command(name="next", description="Passe à la musique suivante")
@@ -275,7 +290,7 @@ async def théa(ctx: discord.Interaction):
 
     # Check if the user is in a voice channel
     if not ctx.author.voice:
-        await ctx.respond("Tu n'es pas dans un salon vocal, rejoins un salon vocal et relance la commande !")
+        await ctx.respond("Tu n'es pas dans un salon vocal, rejoins une voc et relance la commande !")
         return
 
     voice_channel = ctx.author.voice.channel

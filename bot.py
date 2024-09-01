@@ -18,37 +18,37 @@ playlist_positions = {}     # Tracks song positions for each guild
 playlist_messages = {}      # Dictionary to track the playlist messages for each guild
 
 thea_playlist = [
-    "https://youtu.be/T17OozgVt5s",
-    "https://youtu.be/CWbcmTMNKdk",
-    "https://youtu.be/kBSCSWkWrYw",
-    "https://youtu.be/HAc57Xd-m6Q",
-    "https://youtu.be/HhNw464QKIE",
-    "https://youtu.be/urLYT52vAUU",
-    "https://youtu.be/LZ4MAVh53OA",
-    "https://youtu.be/gDMkiOM7t34",
-    "https://youtu.be/siXX5rh-wEI",
-    "https://youtu.be/nutwTeKKoOk",
-    "https://youtu.be/kpI7U_QO7Ck",
-    "https://youtu.be/fc6PgIMclY8",
-    "https://youtu.be/uEQ1rpvTGmA",
-    "https://youtu.be/5zWUCdz4_wc",
-    "https://youtu.be/W6n14deCAxU",
-    "https://youtu.be/xtcEuBYmB0w",
-    "https://youtu.be/-5kPBJH_jQc",
-    "https://youtu.be/KZXIAdqX20g",
-    "https://youtu.be/tw6IHuG359s",
+    "https://youtu.be/T17OozgVt5s", # PTSMR
+    "https://youtu.be/CWbcmTMNKdk", # TEEN MOVIE
+    "https://youtu.be/kBSCSWkWrYw", # JUSTE AMIS
+    "https://youtu.be/HAc57Xd-m6Q", # ENFANT D'LA RAVE
+    "https://youtu.be/HhNw464QKIE", # ANXIOLYTIQUES
+    "https://youtu.be/urLYT52vAUU", # HANNAH MONTANA
+    "https://youtu.be/LZ4MAVh53OA", # Bal de chair
+    "https://youtu.be/gDMkiOM7t34", # AAAAAAH
+    "https://youtu.be/siXX5rh-wEI", # A la mort
+    "https://youtu.be/nutwTeKKoOk", # Derniers mots
+    "https://youtu.be/kpI7U_QO7Ck", # Entropie
+    "https://youtu.be/fc6PgIMclY8", # Sous la lune
+    "https://youtu.be/uEQ1rpvTGmA", # Ca ira
+    "https://youtu.be/5zWUCdz4_wc", # De salem et d'ailleur
+    "https://youtu.be/W6n14deCAxU", # Grisaille
+    "https://youtu.be/xtcEuBYmB0w", # Quoi de neuf les voyous
+    "https://youtu.be/-5kPBJH_jQc", # Echo
+    "https://youtu.be/KZXIAdqX20g", # Enfant Doué.e
+    "https://youtu.be/tw6IHuG359s", # Guillotine
     #EGO de sunyel ft théa introuvable
-    "https://youtu.be/U6didLpHRig",
-    "https://youtu.be/66wP8Q_PA0Q",
-    "https://youtu.be/rl4-vkvfR0A",
-    "https://youtu.be/aSHzhTLR7Cs",
+    "https://youtu.be/U6didLpHRig", # Plume
+    "https://youtu.be/66wP8Q_PA0Q", # Pourtant
+    "https://youtu.be/rl4-vkvfR0A", # Ennui
+    "https://youtu.be/aSHzhTLR7Cs", # Flemme
     #Dopamine de théa ft sunyel introuvable
-    "https://youtu.be/zLRfkoMQAUc",
-    "https://youtu.be/XjX5-Yt1VME",
+    "https://youtu.be/zLRfkoMQAUc", # Plus rien n'existe
+    "https://youtu.be/XjX5-Yt1VME", # Solitaires (ft sunyel la pedo)
     # Semer la ville de théa ft ash léa introuvable
-    "https://youtu.be/UQ7K8cW3BLs"
-    #Lacunaire de théa ft mrs yéyé introuvable / https://youtu.be/oQahU1COcsI
-    # excès et déni de théa introuvable / https://youtu.be/5wX0CHQPdz8
+    "https://youtu.be/UQ7K8cW3BLs", # Et la haine ? 
+    "https://youtu.be/oQahU1COcsI", # Lacunaire (direct)
+    "https://youtu.be/5wX0CHQPdz8" # Excès et déni
     # De nos p'tits bras introuvable 
 
 ]
@@ -201,33 +201,45 @@ async def play(ctx: discord.Interaction, query: str):
         await play_next(ctx)
 
 
-@client.slash_command(name="next", description="Joue la prochaine musique de la playlist")
+@client.slash_command(name="next", description="Passe à la musique suivante")
 async def next(ctx: discord.Interaction):
-    await ctx.response.defer()
-    vc = ctx.voice_client
-    guild_id = ctx.guild.id
-
-    if guild_id in music_queues:
-        # Check if the queue has more songs left
-        if not music_queues[guild_id].empty():
-            if vc and vc.is_playing():
-                vc.stop()  # Stop the current song and trigger play_next
-            else:
-                await play_next(ctx, triggered_by_next=True)
-        else:
-            await ctx.respond("C'était la dernière musique, il n'y en a plus dans la liste !")
-    else:
-        await ctx.respond("Il n'y a aucune musique en attente dans la liste !")
-
-async def play_from_playlist(ctx: discord.Interaction):
     guild_id = ctx.guild.id
     vc = ctx.guild.voice_client
 
-    if guild_id not in guild_playlists or guild_playlists[guild_id] >= len(thea_playlist):
-        # Playlist is finished or not started yet, reset position and leave
+    # Initialize the guild's playlist position if it doesn't exist
+    if guild_id not in guild_playlists:
         guild_playlists[guild_id] = 0
-        if vc and vc.is_connected():
-            await vc.disconnect()
+
+    if not vc or not vc.is_connected():
+        await ctx.respond("Je ne suis pas connecté à un salon vocal.")
+        return
+
+    if not vc.is_playing():
+        await ctx.respond("Aucune musique n'est en train de jouer.")
+        return
+
+    if guild_playlists[guild_id] >= len(thea_playlist):
+        await ctx.respond("Il n'y a plus de musiques dans la playlist.")
+        return
+
+    # Stop the current song, which triggers the after function to play the next song
+    vc.stop()
+    await ctx.respond("Passage à la musique suivante...", delete_after=0)
+
+
+async def play_from_thea(ctx: discord.Interaction):
+    guild_id = ctx.guild.id
+    vc = ctx.guild.voice_client
+
+    # Check if bot is disconnected during playlist
+    if vc is None or not vc.is_connected():
+        guild_playlists[guild_id] = 0
+        return
+
+    if guild_id not in guild_playlists or guild_playlists[guild_id] >= len(thea_playlist):
+        # Playlist finished or reset
+        guild_playlists[guild_id] = 0
+        await vc.disconnect()
         return
 
     # Get the current song from the playlist
@@ -235,7 +247,7 @@ async def play_from_playlist(ctx: discord.Interaction):
     stream_url, title, thumbnail, duration = get_audio_info(url)
 
     vc.play(discord.FFmpegPCMAudio(stream_url, **FFMPEG_OPTIONS),
-            after=lambda e: asyncio.run_coroutine_threadsafe(play_from_playlist(ctx), client.loop).result())
+            after=lambda e: asyncio.run_coroutine_threadsafe(play_from_thea(ctx), client.loop).result())
 
     duration_str = format_duration(duration)
 
@@ -252,7 +264,7 @@ async def play_from_playlist(ctx: discord.Interaction):
     # Move to the next song in the playlist
     guild_playlists[guild_id] += 1
 
-@client.slash_command(name="théa", description="!NE PAS UTILISER / PAS FINI! Joue toutes les musiques de théa")
+@client.slash_command(name="théa", description="Joue toutes les musiques de Théa")
 async def théa(ctx: discord.Interaction):
     await ctx.response.defer()
     guild_id = ctx.guild.id
@@ -263,28 +275,37 @@ async def théa(ctx: discord.Interaction):
 
     # Check if the user is in a voice channel
     if not ctx.author.voice:
-        await ctx.respond("Tu n'es pas dans un salon vocal, rejoin une voc et relance la commande !")
+        await ctx.respond("Tu n'es pas dans un salon vocal, rejoins un salon vocal et relance la commande !")
         return
 
     voice_channel = ctx.author.voice.channel
     vc = ctx.voice_client
+
+    embed = discord.Embed(
+        title=f"Je vais jouer toutes les musiques de Théa !",
+        description="PTSMR\nTEEN MOVIE\nJUSTE AMIS\nENFANTS D'LA RAVE\n ANXIOLYTIQUES\nHANNAH MONTANA\nBal de chair\nAAAAAAAH\nA la mort\n Derniers mots\nEntropie\nSous la lune\nCa ira\nDe salem et d'ailleur\nGrisaille\nQuoi de neuf les voyous\nEcho\nEnfant Doué.e\nGuillotine\nPlume\nPourtant\nEnnui\nFlemme\nDopamine\nPlus rien n'existe\nSolitaires (ft sunyel la pedo)\nEt la haine?\nLacunaire (direct)\nExcès et Déni",
+        color=discord.Color.from_rgb(235, 76, 200)
+    )
+    await ctx.respond(embed=embed)
 
     if vc is None:
         vc = await voice_channel.connect()
 
     # Start playing from the playlist
     if not vc.is_playing():
-        await play_from_playlist(ctx)
+        await play_from_thea(ctx)
 
 @client.slash_command(name="leave", description="Quitte la voc")
 async def leave(ctx: discord.Interaction):
     guild_id = ctx.guild.id
     if ctx.voice_client:
-        guild_playlists[guild_id] = 0
+        guild_playlists[guild_id] = 0  # Reset the playlist
         await ctx.guild.voice_client.disconnect()
-        ack_msg = await ctx.response.send_message("Déconnexion en cours...", delete_after=0)
+        await ctx.response.send_message("Déconnexion en cours...", delete_after=0)
     else:
         await ctx.respond("Je ne peux pas quitter la voc, puisque je ne suis pas dedans !")
+
+
 
 @client.event
 async def on_voice_state_update(member, before, after):

@@ -5,6 +5,8 @@ from asyncio import Queue, run_coroutine_threadsafe
 import yt_dlp
 import re
 import asyncio
+import os
+import subprocess
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -103,53 +105,70 @@ def get_audio_info(url):
         duration = info.get('duration', 0)
         return info['url'], info['title'], info['thumbnail'], duration
 
-async def play_next(ctx: discord.Interaction, triggered_by_next=False):
+def get_file_duration(filepath: str) -> str:
+    """Gets the duration of a local audio file using ffprobe."""
+    try:
+        result = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", filepath],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT
+        )
+        duration = float(result.stdout)
+        return format_duration(duration)
+    except Exception as e:
+        print(e)
+        return "Inconnue"  # Return "Unknown" if duration can't be determined
+
+async def play_next(ctx: discord.Interaction):
     guild_id = ctx.guild.id
     vc = ctx.guild.voice_client
-    # Check if the bot is still connected to the voice channel
-    if vc is None or not vc.is_connected():
-        return
 
     if guild_id not in music_queues or music_queues[guild_id].empty():
-        # Queue is empty, leave the voice channel
-        if vc and vc.is_connected():
-            await vc.disconnect()
-        # Only send the message if it was triggered by the /next command
-        if triggered_by_next:
-            await ctx.followup.send("C'était la dernière musique, il n'y en a plus dans la liste !")
+        # No more songs in the queue, reset and disconnect
+        playlist_positions[guild_id] = 0
+        song_played_positions[guild_id] = 0
+        await vc.disconnect()
         return
-
-    # Increment the current song played counter for this guild
-    song_played_positions[guild_id] += 1
 
     # Get the next song URL from the queue
     url = await music_queues[guild_id].get()
-    stream_url, title, thumbnail, duration = get_audio_info(url)
 
+    if url.startswith("http") and "youtube" in url:
+        # YouTube URL
+        stream_url, title, thumbnail, duration = get_audio_info(url)
+        duration_str = format_duration(duration)
+        embed = discord.Embed(
+            title=f"En train de jouer : {title} !",
+            url=url,
+            description=f"Durée : {duration_str}\nMusique N°{song_played_positions[guild_id] + 1}",
+            color=discord.Color.blurple()
+        )
+        embed.set_thumbnail(url=thumbnail)
+    else:
+        # Local file attachment
+        stream_url = url  # For files, the URL is already the stream URL
+        title = os.path.basename(url).split("?")[0]  # Extract the clean file name without parameters
+        duration_str = get_file_duration(url)  # Get the duration if possible, otherwise return "Inconnue"
+        embed = discord.Embed(
+            title=f"En train de jouer : {title} !",
+            description=f"Durée : {duration_str}\nMusique N°{song_played_positions[guild_id] + 1}",
+            url=url,
+            color=discord.Color.blurple()
+        )
+
+    await ctx.channel.send(embed=embed)
+
+    # Play the audio
     vc.play(discord.FFmpegPCMAudio(stream_url, **FFMPEG_OPTIONS),
             after=lambda e: asyncio.run_coroutine_threadsafe(play_next(ctx), client.loop).result())
 
-    duration_str = format_duration(duration)
+    # Increment the song position counter
+    song_played_positions[guild_id] += 1
 
-    # Retrieve and delete the "added to playlist" message for the current song
-    if song_played_positions[guild_id] in playlist_messages[guild_id]:
-        added_msg = playlist_messages[guild_id].pop(song_played_positions[guild_id])
-        await added_msg.delete()
-
-    embed = discord.Embed(
-        title=f"En train de jouer : {title} !",
-        url=url,
-        description=f"Durée : {duration_str}\nMusique N°{song_played_positions[guild_id] + 1}",
-        color=discord.Color.blurple()
-    )
-    embed.set_thumbnail(url=thumbnail)
-
-    # Send a new message instead of replying to the original interaction
-    await ctx.channel.send(embed=embed)
 
 
 @client.slash_command(name="play", description="Joue une musique")
-async def play(ctx: discord.Interaction, query: str):
+async def play(ctx: discord.Interaction, query: str = None, attachment: discord.Attachment = None):
     await ctx.response.defer()
     guild_id = ctx.guild.id
 
@@ -168,17 +187,30 @@ async def play(ctx: discord.Interaction, query: str):
     voice_channel = ctx.author.voice.channel
     vc = ctx.voice_client
 
-    # Determine if the input is a URL or a search query
-    if not is_url(query):
-        url = search_youtube(query)
-        if url is None:
-            await ctx.respond("Rien trouvé ¯\\_(ツ)_/¯")
-            return
-    else:
-        url = query
+    if attachment is not None:
+        # If an attachment is provided, use it
+        url = attachment.url
+        title = attachment.filename
+        thumbnail = None  # No thumbnail for attachments
+        duration = get_file_duration(url)
+        stream_url = url
+        duration_str = duration
 
-    stream_url, title, thumbnail, duration = get_audio_info(url)
-    duration_str = format_duration(duration)
+    elif query is not None:
+        # If a query is provided, handle it as usual
+        if not is_url(query):
+            url = search_youtube(query)
+            if url is None:
+                await ctx.respond("Rien trouvé ¯\\_(ツ)_/¯")
+                return
+        else:
+            url = query
+
+        stream_url, title, thumbnail, duration = get_audio_info(url)
+        duration_str = format_duration(duration)
+    else:
+        await ctx.respond("Il faut me donner un lien, une recherche ou un fichier.")
+        return
 
     # If this is the first song, start playing it immediately and don't add it to the playlist
     if not vc or not vc.is_playing():
@@ -191,11 +223,13 @@ async def play(ctx: discord.Interaction, query: str):
             description=f"Durée : {duration_str}\nMusique N°1",
             color=discord.Color.blurple()
         )
-        embed.set_thumbnail(url=thumbnail)
+        if thumbnail:
+            embed.set_thumbnail(url=thumbnail)
         await ctx.channel.send(embed=embed)
 
         vc.play(discord.FFmpegPCMAudio(stream_url, **FFMPEG_OPTIONS),
                 after=lambda e: asyncio.run_coroutine_threadsafe(play_next(ctx), client.loop).result())
+        song_played_positions[guild_id] += 1
 
     else:
         # Increment the playlist position only when adding to the queue
@@ -207,9 +241,10 @@ async def play(ctx: discord.Interaction, query: str):
             title=f"{title} a été ajouté à la playlist !",
             url=url,
             description=f"Durée : {duration_str}\nMusique N°{playlist_positions[guild_id] + 1}",
-            color=discord.Color.blurple()
+            color=discord.Color.orange()
         )
-        embed.set_thumbnail(url=thumbnail)
+        if thumbnail:
+            embed.set_thumbnail(url=thumbnail)
         added_msg = await ctx.channel.send(embed=embed)
 
         # Store the message object in the dictionary
@@ -298,7 +333,7 @@ async def théa(ctx: discord.Interaction):
 
     embed = discord.Embed(
         title=f"Je vais jouer toutes les musiques de Théa !",
-        description="PTSMR\nTEEN MOVIE\nJUSTE AMIS\nENFANTS D'LA RAVE\n ANXIOLYTIQUES\nHANNAH MONTANA\nBal de chair\nAAAAAAAH\nA la mort\n Derniers mots\nEntropie\nSous la lune\nCa ira\nDe salem et d'ailleur\nGrisaille\nQuoi de neuf les voyous\nEcho\nEnfant Doué.e\nGuillotine\nPlume\nPourtant\nEnnui\nFlemme\nDopamine\nPlus rien n'existe\nSolitaires (ft sunyel la pedo)\nEt la haine?\nLacunaire (direct)\nExcès et Déni",
+        description="PTSMR\nTEEN MOVIE\nJUSTE AMIS\nENFANTS D'LA RAVE\n ANXIOLYTIQUES\nHANNAH MONTANA\nBal de chair\nAAAAAAAH\nA la mort\n Derniers mots\nEntropie\nSous la lune\nCa ira\nDe salem et d'ailleur\nGrisaille\nQuoi de neuf les voyous\nEcho\nEnfant Doué.e\nGuillotine\nPlume\nPourtant\nEnnui\nFlemme\nPlus rien n'existe\nSolitaires (ft sunyel la pedo)\nEt la haine?\nLacunaire (direct)\nExcès et Déni",
         color=discord.Color.from_rgb(235, 76, 200)
     )
     await ctx.respond(embed=embed)
@@ -310,6 +345,7 @@ async def théa(ctx: discord.Interaction):
     if not vc.is_playing():
         await play_from_thea(ctx)
 
+
 @client.slash_command(name="leave", description="Quitte la voc")
 async def leave(ctx: discord.Interaction):
     guild_id = ctx.guild.id
@@ -319,8 +355,6 @@ async def leave(ctx: discord.Interaction):
         await ctx.response.send_message("Déconnexion en cours...", delete_after=0)
     else:
         await ctx.respond("Je ne peux pas quitter la voc, puisque je ne suis pas dedans !")
-
-
 
 @client.event
 async def on_voice_state_update(member, before, after):

@@ -7,6 +7,7 @@ import re
 import asyncio
 import os
 import subprocess
+import random
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -323,6 +324,8 @@ async def théa(ctx: discord.Interaction):
     if guild_id not in guild_playlists:
         guild_playlists[guild_id] = 0
 
+    random.shuffle(thea_playlist) # play the music randomly
+
     # Check if the user is in a voice channel
     if not ctx.author.voice:
         await ctx.respond("Tu n'es pas dans un salon vocal, rejoins une voc et relance la commande !")
@@ -332,8 +335,8 @@ async def théa(ctx: discord.Interaction):
     vc = ctx.voice_client
 
     embed = discord.Embed(
-        title=f"Je vais jouer toutes les musiques de Théa !",
-        description="PTSMR\nTEEN MOVIE\nJUSTE AMIS\nENFANTS D'LA RAVE\n ANXIOLYTIQUES\nHANNAH MONTANA\nBal de chair\nAAAAAAAH\nA la mort\n Derniers mots\nEntropie\nSous la lune\nCa ira\nDe salem et d'ailleur\nGrisaille\nQuoi de neuf les voyous\nEcho\nEnfant Doué.e\nGuillotine\nPlume\nPourtant\nEnnui\nFlemme\nPlus rien n'existe\nSolitaires (ft sunyel la pedo)\nEt la haine?\nLacunaire (direct)\nExcès et Déni",
+        title=f"Je vais jouer toutes les musiques de Théa en mode aléatoire !",
+        description="Liste des musiques disponibles :\n\n PTSMR\nTEEN MOVIE\nJUSTE AMIS\nENFANTS D'LA RAVE\n ANXIOLYTIQUES\nHANNAH MONTANA\nBal de chair\nAAAAAAAH\nA la mort\n Derniers mots\nEntropie\nSous la lune\nCa ira\nDe salem et d'ailleur\nGrisaille\nQuoi de neuf les voyous\nEcho\nEnfant Doué.e\nGuillotine\nPlume\nPourtant\nEnnui\nFlemme\nPlus rien n'existe\nSolitaires (ft sunyel la pedo)\nEt la haine?\nLacunaire (direct)\nExcès et Déni",
         color=discord.Color.from_rgb(235, 76, 200)
     )
     await ctx.respond(embed=embed)

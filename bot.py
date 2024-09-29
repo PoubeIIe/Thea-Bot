@@ -1,6 +1,7 @@
 import discord
 from discord.ext import commands
 from discord.commands import Option, slash_command
+from discord import ButtonStyle
 from asyncio import Queue, run_coroutine_threadsafe
 import yt_dlp
 import re
@@ -50,12 +51,69 @@ thea_playlist = [
     "https://youtu.be/XjX5-Yt1VME", # Solitaires (ft sunyel la pedo)
     # Semer la ville de théa ft ash léa introuvable
     "https://youtu.be/UQ7K8cW3BLs", # Et la haine ? 
-    "https://youtu.be/oQahU1COcsI", # Lacunaire (direct)
+    "https://youtu.be/JBxNWTS9_-0", # Lacunaire
     "https://youtu.be/5wX0CHQPdz8" # Excès et déni
     # De nos p'tits bras introuvable 
 
 ]
 guild_playlists = {}
+
+class MusicControlView(discord.ui.View):
+    def __init__(self, ctx):
+        super().__init__(timeout=None)  # No timeout for buttons
+        self.ctx = ctx 
+        self.paused = False  # Track whether music is paused or not
+
+    # Pause/Resume button
+    @discord.ui.button(label="⏸ Pause", style=ButtonStyle.primary, custom_id="pause")
+    async def toggle_pause(self, button: discord.ui.Button, interaction: discord.Interaction):
+        vc = self.ctx.guild.voice_client
+        if vc is None or not vc.is_connected():
+            await interaction.response.send_message("Je ne suis pas connecté à un salon vocal.")
+            return
+
+        if self.paused:
+            vc.resume()
+            self.paused = False
+            button.label = "⏸ Pause" 
+            button.style = ButtonStyle.primary
+            await interaction.response.edit_message(view=self)
+        else:
+            vc.pause()
+            self.paused = True
+            button.label = "▶ Resume"
+            button.style = ButtonStyle.success
+            await interaction.response.edit_message(view=self)
+
+    # Skip button
+    @discord.ui.button(label="⏭ Skip", style=ButtonStyle.primary, custom_id="skip")
+    async def skip(self, button: discord.ui.Button, interaction: discord.Interaction):
+        vc = self.ctx.guild.voice_client
+        if vc is None or not vc.is_connected():
+            await interaction.response.send_message("Je ne suis pas connecté à un salon vocal.")
+            return
+        #if vc.is_playing():
+        vc.stop()
+        await interaction.response.send_message("Musique passée !")
+
+    # Stop button
+    @discord.ui.button(label="⏹ Stop", style=ButtonStyle.danger, custom_id="stop")
+    async def stop(self, button: discord.ui.Button, interaction: discord.Interaction):
+        guild_id = interaction.guild.id
+        vc = self.ctx.guild.voice_client
+
+        if vc is None or not vc.is_connected():
+            await interaction.response.send_message("Je ne suis pas connecté à un salon vocal.")
+            return
+
+        if vc.is_playing():
+            vc.stop()
+            await interaction.response.send_message("J'ai quitté la voc !.")
+        if vc.is_connected():
+            await vc.disconnect()
+            await interaction.response.send_message("J'ai quitté la voc !.")
+
+
 
 
 @client.slash_command(name="slashping", description="Test command")
@@ -106,8 +164,8 @@ def get_audio_info(url):
         duration = info.get('duration', 0)
         return info['url'], info['title'], info['thumbnail'], duration
 
+# Gets the duration of a local audio file using ffprobe
 def get_file_duration(filepath: str) -> str:
-    """Gets the duration of a local audio file using ffprobe."""
     try:
         result = subprocess.run(
             ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", filepath],
@@ -131,11 +189,9 @@ async def play_next(ctx: discord.Interaction):
         await vc.disconnect()
         return
 
-    # Get the next song URL from the queue
     url = await music_queues[guild_id].get()
 
     if url.startswith("http") and "youtube" in url:
-        # YouTube URL
         stream_url, title, thumbnail, duration = get_audio_info(url)
         duration_str = format_duration(duration)
         embed = discord.Embed(
@@ -147,23 +203,23 @@ async def play_next(ctx: discord.Interaction):
         embed.set_thumbnail(url=thumbnail)
     else:
         # Local file attachment
-        stream_url = url  # For files, the URL is already the stream URL
-        title = os.path.basename(url).split("?")[0]  # Extract the clean file name without parameters
-        duration_str = get_file_duration(url)  # Get the duration if possible, otherwise return "Inconnue"
+        stream_url = url 
+        title = os.path.basename(url).split("?")[0] 
+        duration_str = get_file_duration(url)
         embed = discord.Embed(
             title=f"En train de jouer : {title} !",
             description=f"Durée : {duration_str}\nMusique N°{song_played_positions[guild_id] + 1}",
             url=url,
             color=discord.Color.blurple()
         )
+    view = MusicControlView(ctx)
+    
 
-    await ctx.channel.send(embed=embed)
+    await ctx.channel.send(embed=embed, view=view)
 
-    # Play the audio
     vc.play(discord.FFmpegPCMAudio(stream_url, **FFMPEG_OPTIONS),
             after=lambda e: asyncio.run_coroutine_threadsafe(play_next(ctx), client.loop).result())
 
-    # Increment the song position counter
     song_played_positions[guild_id] += 1
 
 
@@ -173,14 +229,12 @@ async def play(ctx: discord.Interaction, query: str = None, attachment: discord.
     await ctx.response.defer()
     guild_id = ctx.guild.id
 
-    # Initialize the queue, song position counter, and playlist message store if not already set
     if guild_id not in music_queues:
         music_queues[guild_id] = Queue()
         playlist_positions[guild_id] = 0
         song_played_positions[guild_id] = 0
         playlist_messages[guild_id] = {}
 
-    # Check if the user is in a voice channel
     if not ctx.author.voice:
         await ctx.respond("Tu n'es pas dans un salon vocal, rejoins un voc et relance la commande !")
         return
@@ -189,16 +243,14 @@ async def play(ctx: discord.Interaction, query: str = None, attachment: discord.
     vc = ctx.voice_client
 
     if attachment is not None:
-        # If an attachment is provided, use it
         url = attachment.url
         title = attachment.filename
-        thumbnail = None  # No thumbnail for attachments
+        thumbnail = None
         duration = get_file_duration(url)
         stream_url = url
         duration_str = duration
 
     elif query is not None:
-        # If a query is provided, handle it as usual
         if not is_url(query):
             url = search_youtube(query)
             if url is None:
@@ -217,16 +269,17 @@ async def play(ctx: discord.Interaction, query: str = None, attachment: discord.
     if not vc or not vc.is_playing():
         if vc is None:
             vc = await voice_channel.connect()
-
+    
         embed = discord.Embed(
             title=f"En train de jouer : {title} !",
             url=url,
             description=f"Durée : {duration_str}\nMusique N°1",
             color=discord.Color.blurple()
         )
+        view = MusicControlView(ctx)
         if thumbnail:
             embed.set_thumbnail(url=thumbnail)
-        await ctx.channel.send(embed=embed)
+        await ctx.channel.send(embed=embed, view=view)
 
         vc.play(discord.FFmpegPCMAudio(stream_url, **FFMPEG_OPTIONS),
                 after=lambda e: asyncio.run_coroutine_threadsafe(play_next(ctx), client.loop).result())
@@ -237,7 +290,6 @@ async def play(ctx: discord.Interaction, query: str = None, attachment: discord.
         playlist_positions[guild_id] += 1
         await music_queues[guild_id].put(url)
 
-        # Inform the user that the song was added to the playlist
         embed = discord.Embed(
             title=f"{title} a été ajouté à la playlist !",
             url=url,
@@ -248,7 +300,6 @@ async def play(ctx: discord.Interaction, query: str = None, attachment: discord.
             embed.set_thumbnail(url=thumbnail)
         added_msg = await ctx.channel.send(embed=embed)
 
-        # Store the message object in the dictionary
         playlist_messages[guild_id][playlist_positions[guild_id]] = added_msg
 
 
@@ -257,7 +308,6 @@ async def next(ctx: discord.Interaction):
     guild_id = ctx.guild.id
     vc = ctx.guild.voice_client
 
-    # Initialize the guild's playlist position if it doesn't exist
     if guild_id not in guild_playlists:
         guild_playlists[guild_id] = 0
 
@@ -273,7 +323,6 @@ async def next(ctx: discord.Interaction):
         await ctx.respond("Il n'y a plus de musiques dans la playlist.")
         return
 
-    # Stop the current song, which triggers the after function to play the next song
     vc.stop()
     await ctx.respond("Passage à la musique suivante...", delete_after=0)
 
@@ -282,18 +331,15 @@ async def play_from_thea(ctx: discord.Interaction):
     guild_id = ctx.guild.id
     vc = ctx.guild.voice_client
 
-    # Check if bot is disconnected during playlist
     if vc is None or not vc.is_connected():
         guild_playlists[guild_id] = 0
         return
 
     if guild_id not in guild_playlists or guild_playlists[guild_id] >= len(thea_playlist):
-        # Playlist finished or reset
         guild_playlists[guild_id] = 0
         await vc.disconnect()
         return
 
-    # Get the current song from the playlist
     url = thea_playlist[guild_playlists[guild_id]]
     stream_url, title, thumbnail, duration = get_audio_info(url)
 
@@ -309,8 +355,9 @@ async def play_from_thea(ctx: discord.Interaction):
         color=discord.Color.blurple()
     )
     embed.set_thumbnail(url=thumbnail)
+    view = MusicControlView(ctx)
 
-    await ctx.channel.send(embed=embed)
+    await ctx.channel.send(embed=embed, view=view)
 
     # Move to the next song in the playlist
     guild_playlists[guild_id] += 1
@@ -320,13 +367,11 @@ async def théa(ctx: discord.Interaction):
     await ctx.response.defer()
     guild_id = ctx.guild.id
 
-    # Initialize the playlist position for the guild
     if guild_id not in guild_playlists:
         guild_playlists[guild_id] = 0
 
-    random.shuffle(thea_playlist) # play the music randomly
+    random.shuffle(thea_playlist)
 
-    # Check if the user is in a voice channel
     if not ctx.author.voice:
         await ctx.respond("Tu n'es pas dans un salon vocal, rejoins une voc et relance la commande !")
         return
@@ -336,7 +381,7 @@ async def théa(ctx: discord.Interaction):
 
     embed = discord.Embed(
         title=f"Je vais jouer toutes les musiques de Théa en mode aléatoire !",
-        description="Liste des musiques disponibles :\n\n PTSMR\nTEEN MOVIE\nJUSTE AMIS\nENFANTS D'LA RAVE\n ANXIOLYTIQUES\nHANNAH MONTANA\nBal de chair\nAAAAAAAH\nA la mort\n Derniers mots\nEntropie\nSous la lune\nCa ira\nDe salem et d'ailleur\nGrisaille\nQuoi de neuf les voyous\nEcho\nEnfant Doué.e\nGuillotine\nPlume\nPourtant\nEnnui\nFlemme\nPlus rien n'existe\nSolitaires (ft sunyel la pedo)\nEt la haine?\nLacunaire (direct)\nExcès et Déni",
+        description="Liste des musiques disponibles :\n\n PTSMR\nTEEN MOVIE\nJUSTE AMIS\nENFANTS D'LA RAVE\n ANXIOLYTIQUES\nHANNAH MONTANA\nBal de chair\nAAAAAAAH\nA la mort\n Derniers mots\nEntropie\nSous la lune\nCa ira\nDe salem et d'ailleur\nGrisaille\nQuoi de neuf les voyous\nEcho\nEnfant Doué.e\nGuillotine\nPlume\nPourtant\nEnnui\nFlemme\nPlus rien n'existe\nSolitaires (ft sunyel la pedo)\nEt la haine?\nLacunaire\nExcès et Déni",
         color=discord.Color.from_rgb(235, 76, 200)
     )
     await ctx.respond(embed=embed)
@@ -344,7 +389,6 @@ async def théa(ctx: discord.Interaction):
     if vc is None:
         vc = await voice_channel.connect()
 
-    # Start playing from the playlist
     if not vc.is_playing():
         await play_from_thea(ctx)
 
@@ -353,7 +397,7 @@ async def théa(ctx: discord.Interaction):
 async def leave(ctx: discord.Interaction):
     guild_id = ctx.guild.id
     if ctx.voice_client:
-        guild_playlists[guild_id] = 0  # Reset the playlist
+        guild_playlists[guild_id] = 0
         await ctx.guild.voice_client.disconnect()
         await ctx.response.send_message("Déconnexion en cours...", delete_after=0)
     else:
@@ -361,13 +405,11 @@ async def leave(ctx: discord.Interaction):
 
 @client.event
 async def on_voice_state_update(member, before, after):
-    # Check if the bot is disconnected from the voice channel
     if member == client.user and before.channel is not None and after.channel is None:
         guild_id = before.channel.guild.id
-        # Reset counters and clear messages
         playlist_positions[guild_id] = 0
         song_played_positions[guild_id] = 0
-        playlist_messages[guild_id] = {}  # Clear playlist messages
+        playlist_messages[guild_id] = {}
 
         #for your own use, prescise the id you your channel where you want to sentd this message
         # or send it in the system channel :
